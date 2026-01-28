@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <title>XML Generátor PR-EPR - Brno-Bystrc</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; padding: 20px; color: #1c1e21; }
+        .container { max-width: 950px; margin: auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h2 { color: #002a54; border-bottom: 2px solid #002a54; padding-bottom: 10px; }
+        .section-title { background: #e7f3ff; padding: 8px 15px; font-weight: bold; margin: 20px 0 10px; border-radius: 4px; color: #0056b3; }
+        .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; }
+        .span-2 { grid-column: span 2; }
+        .span-4 { grid-column: span 4; }
+        label { font-size: 12px; font-weight: 600; color: #4b4f56; display: block; margin-bottom: 5px; }
+        input { width: 100%; padding: 10px; border: 1px solid #dddfe2; border-radius: 6px; box-sizing: border-box; }
+        .btn-main { background: #28a745; color: white; padding: 15px; border: none; border-radius: 6px; cursor: pointer; width: 100%; font-weight: bold; font-size: 16px; margin-top: 30px; }
+        .btn-main:hover { background: #218838; }
+        #debug { background: #f8f9fa; border: 1px solid #ddd; padding: 10px; font-size: 11px; height: 100px; overflow-y: scroll; margin-top: 20px; font-family: monospace; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Generátor pro formulář PR-EPR</h2>
+    <p>Nahrajte PDF rozhodnutí. Kód vygeneruje XML kompatibilní s vaším systémem.</p>
+    
+    <input type="file" id="pdfUpload" accept=".pdf" style="margin: 10px 0 20px 0;">
+
+    <div class="section-title">Základní údaje podání</div>
+    <div class="grid">
+        <div class="span-2"><label>Číslo jednací poukazu (hlavní)</label><input type="text" id="cj_poukazu"></div>
+        <div class="span-2"><label>Datum sestavení</label><input type="date" id="datum_sestaveni"></div>
+    </div>
+
+    <div class="section-title">Údaje o dlužníkovi</div>
+    <div class="grid">
+        <div class="span-2"><label>Příjmení / Název</label><input type="text" id="prijmeni"></div>
+        <div><label>Jméno</label><input type="text" id="jmeno"></div>
+        <div><label>Datum narození</label><input type="text" id="datum_narozeni"></div>
+        <div class="span-4"><label>Adresa trvalého pobytu (celá)</label><input type="text" id="adresa_text"></div>
+    </div>
+
+    <div class="section-title">Rozhodnutí a Sankce</div>
+    <div class="grid">
+        <div class="span-2"><label>Číslo jednací rozhodnutí</label><input type="text" id="cislo_jednaci"></div>
+        <div><label>Částka (Kč)</label><input type="number" id="castka"></div>
+        <div><label>Právní moc (NPM)</label><input type="text" id="datum_npm"></div>
+        <div><label>Splatnost</label><input type="text" id="datum_splatnosti"></div>
+        <div><label>Právní norma</label><input type="text" id="pravni_norma"></div>
+        <div><label>Paragraf</label><input type="text" id="paragraf"></div>
+    </div>
+
+    <button onclick="generateXML()" class="btn-main">VYGENEROVAT XML K NAČTENÍ</button>
+
+    <div id="debug">Zde se zobrazí vytěžený text z PDF...</div>
+</div>
+
+<script>
+    const pdfjsLib = window['pdfjs-dist/build/pdf'];
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    // Pomocné funkce
+    const clean = (t) => t ? t.replace(//g,'č').replace(/Z/g,'ř').replace(/~/g,'ž').replace(/\s+/g,' ').trim() : "";
+    const toISO = (d) => {
+        if(!d) return "";
+        const parts = d.replace(/\s/g,'').split('.');
+        if(parts.length === 3) return `${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`;
+        return d;
+    };
+
+    document.getElementById('pdfUpload').addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        // Nastavení dnešního data
+        document.getElementById('datum_sestaveni').value = new Date().toISOString().split('T')[0];
+
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+        let fullText = "";
+        for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            fullText += content.items.map(s => s.str).join(' ') + "\n";
+        }
+        document.getElementById('debug').innerText = fullText;
+
+        // Těžba dat
+        const cj = fullText.match(/MCBYS\/[0-9\-]+\/[A-Z0-9]+/g);
+        if(cj) {
+            document.getElementById('cj_poukazu').value = cj[0];
+            document.getElementById('cislo_jednaci').value = cj[cj.length-1];
+        }
+
+        const jmenoMatch = fullText.match(/pZíkaz\s*:\s*([^,]+?)\s*,\s*nar/);
+        if(jmenoMatch) {
+            const names = clean(jmenoMatch[1]).split(' ');
+            document.getElementById('jmeno').value = names[0];
+            document.getElementById('prijmeni').value = names.slice(1).join(' ');
+        }
+
+        const dNar = fullText.match(/nar\.\s*(\d{1,2}\.\s*\d{1,2}\.\d{4})/);
+        if(dNar) document.getElementById('datum_narozeni').value = dNar[1].replace(/\s/g,'');
+
+        const addr = fullText.match(/bytem\s*([^,]+,[^,]+,\s*\d{3}\s*\d{2})/);
+        if(addr) document.getElementById('adresa_text').value = clean(addr[1]);
+
+        const amt = fullText.match(/výai\s*(\d[\d\s]*)/);
+        if(amt) document.getElementById('castka').value = amt[1].replace(/\s/g,'');
+
+        const pm = fullText.match(/právní\s+moci\s+dne\s*(\d{1,2}\.\s*\d{1,2}\.\d{4})/);
+        if(pm) document.getElementById('datum_npm').value = pm[1].replace(/\s/g,'');
+
+        const spl = fullText.match(/vykonatelné\s+dnem\s*(\d{1,2}\.\s*\d{1,2}\.\d{4})/);
+        if(spl) document.getElementById('datum_splatnosti').value = spl[1].replace(/\s/g,'');
+
+        const law = fullText.match(/§\s*(\d+)/);
+        if(law) document.getElementById('paragraf').value = law[1];
+        
+        const norma = fullText.match(/zákona\s+(?:\.\s*)?(\d+\/\d+)/);
+        if(norma) document.getElementById('pravni_norma').value = norma[1];
+    });
+
+    function generateXML() {
+        const val = (id) => document.getElementById(id).value;
+        const uuid = self.crypto.randomUUID();
+
+        // Sestavení XML přesně podle PR-EPR_data_pro_nacteni.xml
+        const xml = `<?xml version='1.0' encoding='UTF-8'?>
+<podani>
+    <kod>PR-EPR</kod>
+    <datum_sestaveni>${val('datum_sestaveni')}</datum_sestaveni>
+    <cj_poukazu>${val('cj_poukazu')}</cj_poukazu>
+    <ukladatel>
+        <subjektID_ic>44992785</subjektID_ic>
+        <DatovaSchranka>6kibw39</DatovaSchranka>
+        <nazev>Městská část Brno-Bystrc</nazev>
+        <adresa>
+            <text>náměstí 28. dubna 145/60, Bystrc, 63500, Brno</text>
+            <magicKey></magicKey>
+            <cislo_popisne>145</cislo_popisne>
+            <cislo_orientacni>60</cislo_orientacni>
+            <cislo_orientacni_pismeno></cislo_orientacni_pismeno>
+            <ulice>náměstí 28. dubna</ulice>
+            <cast_obce>Bystrc</cast_obce>
+            <obec>Brno</obec>
+            <psc>63500</psc>
+            <stat></stat>
+        </adresa>
+    </ukladatel>
+    <Rozhodnuti_grp>
+        <Rozhodnuti>
+            <rozhodnuti_poplatek_pom>Rozhodnuti</rozhodnuti_poplatek_pom>
+            <poradove_cislo>1</poradove_cislo>
+            <typ_subjektu>FO</typ_subjektu>
+            <subjektCZ>ANO</subjektCZ>
+            <jmeno>${val('jmeno')}</jmeno>
+            <prijmeni>${val('prijmeni')}</prijmeni>
+            <nazev></nazev>
+            <ic></ic>
+            <datum_narozeni>${toISO(val('datum_narozeni'))}</datum_narozeni>
+            <rc></rc>
+            <nazevCu></nazevCu>
+            <cisloCu></cisloCu>
+            <iddsCu></iddsCu>
+            <adresa>
+                <text>${val('adresa_text')}</text>
+                <magicKey></magicKey>
+                <cislo_popisne></cislo_popisne>
+                <cislo_orientacni></cislo_orientacni>
+                <cislo_orientacni_pismeno></cislo_orientacni_pismeno>
+                <ulice></ulice>
+                <cast_obce></cast_obce>
+                <obec></obec>
+                <psc></psc>
+                <kraj></kraj>
+                <kraj_kod></kraj_kod>
+                <stat>CZE</stat>
+                <stat_pom>CZE - Česká Republika</stat_pom>
+            </adresa>
+            <cislo_jednaci>${val('cislo_jednaci')}</cislo_jednaci>
+            <datum_ulozeni>${val('datum_sestaveni')}</datum_ulozeni>
+            <datum_splatnosti>${toISO(val('datum_splatnosti'))}</datum_splatnosti>
+            <datum_doruceni></datum_doruceni>
+            <datum_npm>${toISO(val('datum_npm'))}</datum_npm>
+            <castka>${val('castka')}</castka>
+            <pocet_zaloh></pocet_zaloh>
+            <zalohy>
+                <zaloha>
+                    <poradove_cislo_zalohy>1</poradove_cislo_zalohy>
+                    <castka_zalohy></castka_zalohy>
+                    <datum_splatnosti_zalohy></datum_splatnosti_zalohy>
+                </zaloha>
+            </zalohy>
+            <pravni_norma>${val('pravni_norma')}</pravni_norma>
+            <paragraf>${val('paragraf')}</paragraf>
+            <odstavec></odstavec>
+            <pismeno></pismeno>
+            <spz></spz>
+            <elektronicky_dokument>
+                <id_el_dokumentu>${uuid}_Rozhodnuti</id_el_dokumentu>
+            </elektronicky_dokument>
+        </Rozhodnuti>
+    </Rozhodnuti_grp>
+</podani>`;
+
+        const blob = new Blob([xml], { type: 'text/xml' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `PR-EPR_${val('prijmeni')}.xml`;
+        a.click();
+    }
+</script>
+
+</body>
+</html>
